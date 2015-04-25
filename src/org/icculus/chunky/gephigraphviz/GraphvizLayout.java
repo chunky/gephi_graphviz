@@ -22,16 +22,24 @@
 
 package org.icculus.chunky.gephigraphviz;
 
-import java.awt.Label;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.MissingResourceException;
+
 import javax.swing.JOptionPane;
-import org.gephi.graph.api.Attributes;
+
 import org.gephi.graph.api.Edge;
 import org.gephi.graph.api.Graph;
 import org.gephi.graph.api.Node;
@@ -51,195 +59,143 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
     private String rankDir = "LR";
     private String overlap = "false";
     private Boolean concentrate = false;
-    
-    
+
     private Graph graph;
-    
+
     public GraphvizLayout(LayoutBuilder layoutBuilder) {
         super(layoutBuilder);
     }
 
+    @Override
     public void initAlgo() {
-        graph = graphModel.getGraphVisible();
+        this.graph = graphModel.getGraphVisible();
         setConverged(false);
     }
 
+    @Override
     public void goAlgo() {
-        graph = graphModel.getGraphVisible();
-        String dotfile = "digraph g {\n";
-        dotfile = dotfile.concat("layout = \"" + algoName + "\";\n");
-        dotfile = dotfile.concat("rankdir = \"" + rankDir + "\";\n");
-        dotfile = dotfile.concat("overlap = \"" + overlap + "\";\n");
-        if(concentrate) dotfile = dotfile.concat("concentrate=true;\n");
-        
-        for(Node n : graph.getNodes()) {
-            NodeData nodeData = n.getNodeData();
-            float x = nodeData.x();
-            float y = nodeData.y();
-            String labelStr = nodeData.getLabel();
-            
-            String id = new Integer(n.getId()).toString();
-            String pos = "pos=\"" + x + "," + y + "\"";
-            String label = "label=\"" + labelStr + "\"";
-            dotfile = dotfile.concat(id + " [" + pos + ", " + label + "];\n");
+        // Prepare input
+        final StringBuffer dotfile = new StringBuffer();
+
+        dotfile.append("digraph g {\n");
+        dotfile.append("layout = \"").append(this.algoName).append("\";\n");
+        dotfile.append("rankdir = \"").append(this.rankDir).append("\";\n");
+        dotfile.append("overlap = \"").append(this.overlap).append("\";\n");
+        if (this.concentrate) {
+            dotfile.append("concentrate=true;\n");
         }
-        for(Edge e : graph.getEdges()) {
-            String idSource = new Integer(e.getSource().getId()).toString();
-            String idTarget = new Integer(e.getTarget().getId()).toString();
-            float weight = e.getWeight();
-            String edgearrow = e.isDirected()?"->":"--";
-            dotfile = dotfile.concat(idSource + edgearrow + idTarget + " [weight=" + weight + "];\n");
+
+        for (final Node n : this.graph.getNodes()) {
+            final NodeData nodeData = n.getNodeData();
+
+            dotfile.append(n.getId());
+            dotfile.append(" [");
+            dotfile.append("pos=\"").append(nodeData.x()).append(',').append(nodeData.y()).append('"');
+            dotfile.append(", ");
+            dotfile.append("label=\"").append(nodeData.getLabel()).append('"');
+            dotfile.append("];\n");
         }
-        dotfile = dotfile.concat("}\n");
-        
-        List<String> cmd = new ArrayList<String>();
-        cmd.add(dotBinary);
+        for (final Edge e : this.graph.getEdges()) {
+            final String edgearrow = e.isDirected() ? "->" : "--";
+
+            dotfile.append(e.getSource().getId());
+            dotfile.append(edgearrow);
+            dotfile.append(e.getTarget().getId());
+            dotfile.append(" [weight=");
+            dotfile.append(e.getWeight());
+            dotfile.append("];\n");
+        }
+        dotfile.append("}\n");
+
+        // Call Graphviz
+        // we are calling it directly. However, there is also a java binding
+        // http://www.graphviz.org/pdf/gv.3java.pdf
+        final List<String> cmd = new ArrayList<String>();
+        cmd.add(this.dotBinary);
         cmd.add("-Tdot");
-        
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        
+        final ProcessBuilder pb = new ProcessBuilder(cmd);
         Process dotprocess = null;
-        
-        String dotoutput = "";
+
         try {
             dotprocess = pb.start();
+
+            final OutputStream out = dotprocess.getOutputStream();
+            {
+                final BufferedWriter inputForGraphviz = new BufferedWriter(new PrintWriter(out));
+                inputForGraphviz.append(dotfile);
+                inputForGraphviz.flush();
+                inputForGraphviz.close();                
+                out.flush();
+                out.close();
+            }
+
+            processOutput(dotprocess);
         } catch (IOException ex) {
             JOptionPane.showMessageDialog(null, new DotProcessError(ex), "Graphviz process error", JOptionPane.ERROR_MESSAGE);
+        } finally {
+            if (dotprocess != null) {
+                dotprocess.destroy();
+            }
             setConverged(true);
-            return;
         }
-
-        try {
-            OutputStream out = dotprocess.getOutputStream();
-            InputStream in = dotprocess.getInputStream();
-            InputStream err = dotprocess.getErrorStream();
-
-            out.write(dotfile.getBytes());
-            out.flush();
-            out.close();
-            out = null;
-            
-            int len = 0;
-            byte[] buf = new byte[1024];
-            while(0 < (len = in.read(buf))) {
-                dotoutput = dotoutput.concat(new String(buf, 0, len));
-            }
-            
-            int totalErrLen = 0;
-            while(0 < (len = err.read(buf))) {
-                totalErrLen += len;
-                System.err.print(buf.toString());
-            }
-            if(totalErrLen > 0) System.err.println();
-            
-            in.close();
-            in = null;
-            err.close();
-            err = null;
-        } catch (IOException ex) {
-            Exceptions.printStackTrace(ex);
-            setConverged(true);
-            return;
-        }
-        dotprocess.destroy();
-        
-//        System.out.println("\n\n" + dotoutput + "\n\n");
-        
-        // Was thinking of trying to re-use ImporterDOT but not sure
-        //    It's certainly easier to pull the stuff using a trivial regex
-        
-        // "Some people, when faced with a problem, think 'I know, I'll regular expressions'
-        //                ... now they have two problems"
-        String[] lines = dotoutput.split("\n");
-        String regex = ".*?([0-9]+)\\s+\\[.*?pos=\"(\\-?\\d+\\.?\\d*?),(\\-?\\d+\\.?\\d*?)\".*?\\].*";
-        Pattern pat = Pattern.compile(regex, Pattern.DOTALL);
-        System.out.println("Lines returned by graphviz: " + lines.length);
-//        System.out.println("regex: \"" + regex + "\"");
-        for(String line : lines) {
-//            System.out.println("Line: \"" + line + "\"");
-            Matcher match = pat.matcher(line);
-            if(match.matches()) {
-                String nodeid = match.group(1);
-                String x = match.group(2);
-                String y = match.group(3);
-                
-//                System.out.println("Node: " + nodeid + " x=" + x + " y=" + y);
-                
-                int nodeid_i = new Integer(nodeid);
-                Float x_f = new Float(x);
-                Float y_f = new Float(y);
-                Node n = null;
-                // For some reason this one wasn't working
-                // Node n = graph.getNode(nodeid);
-                for(Node testnode : graph.getNodes()) {
-                    if(nodeid_i == testnode.getId()) {
-                        n = testnode;
-                        break;
-                    }
-                }
-                if(null == n) {
-                    System.out.println("Couldn't find nodeid " + nodeid);
-                    continue;
-                }
-                n.getNodeData().setX(x_f);
-                n.getNodeData().setY(y_f);
-            }
-        }
-        
-        setConverged(true);
     }
 
+    @Override
     public void endAlgo() {
     }
 
+    @Override
     public LayoutProperty[] getProperties() {
         List<LayoutProperty> properties = new ArrayList<LayoutProperty>();
         try {
             properties.add(LayoutProperty.createProperty(
-                    this, String.class, 
+                    this, String.class,
                     NbBundle.getMessage(getClass(), "GraphvizLayout.algorithm.desc"),
                     null,
                     "GraphvizLayout.algorithm.name",
                     NbBundle.getMessage(getClass(), "GraphvizLayout.algorithm.name"),
                     "getAlgoName", "setAlgoName"));
-             
+
             properties.add(LayoutProperty.createProperty(
-                    this, String.class, 
+                    this, String.class,
                     NbBundle.getMessage(getClass(), "GraphvizLayout.dotbinary.desc"),
                     null,
                     "GraphvizLayout.dotbinary.name",
                     NbBundle.getMessage(getClass(), "GraphvizLayout.dotbinary.name"),
                     "getDotBinary", "setDotBinary"));
-            
+
             properties.add(LayoutProperty.createProperty(
-                    this, String.class, 
+                    this, String.class,
                     NbBundle.getMessage(getClass(), "GraphvizLayout.rankdir.desc"),
                     null,
                     "GraphvizLayout.rankdir.name",
                     NbBundle.getMessage(getClass(), "GraphvizLayout.rankdir.name"),
                     "getRankDir", "setRankDir"));
-                        
+
             properties.add(LayoutProperty.createProperty(
-                    this, String.class, 
+                    this, String.class,
                     NbBundle.getMessage(getClass(), "GraphvizLayout.overlap.desc"),
                     null,
                     "GraphvizLayout.overlap.name",
                     NbBundle.getMessage(getClass(), "GraphvizLayout.overlap.name"),
                     "getOverlap", "setOverlap"));
-            
+
             properties.add(LayoutProperty.createProperty(
-                    this, Boolean.class, 
+                    this, Boolean.class,
                     NbBundle.getMessage(getClass(), "GraphvizLayout.concentrate.desc"),
                     null,
                     "GraphvizLayout.concentrate.name",
                     NbBundle.getMessage(getClass(), "GraphvizLayout.concentrate.name"),
                     "isConcentrate", "setConcentrate"));
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (MissingResourceException e) {
+            Exceptions.printStackTrace(e);
+        } catch (NoSuchMethodException e) {
+            Exceptions.printStackTrace(e);
         }
         return properties.toArray(new LayoutProperty[0]);
     }
 
+    @Override
     public void resetPropertiesValues() {
     }
 
@@ -282,5 +238,88 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
     public void setOverlap(String overlap) {
         this.overlap = overlap;
     }
-    
+
+    private void processOutput(final Process dotprocess) {
+        assert dotprocess != null;
+        InputStream in = null;
+        try {
+            in = dotprocess.getInputStream();
+
+            final BufferedReader outputFromGraphviz = new BufferedReader(new InputStreamReader(in));
+            // regex to search for nodes (1st group) and their respective positions (2nd + 3rd group)
+            // we have to filter out other parts of that line and allow for scientific notation; hence this is a little longish
+            final String regex = "^\\s*(\\d+)\\s\\[(?:[A-Za-z]+=\\\"?.*?\\\"?, )*pos=\\\"([+\\-]?(?:0|[1-9]\\d*)(?:\\.\\d*)?(?:[eE][+\\-]?\\d+)?),([+\\-]?(?:0|[1-9]\\d*)(?:\\.\\d*)?(?:[eE][+\\-]?\\d+)?)\\\"(?:, [A-Za-z]+=\\\"?.*?\\\"?)*\\];$";
+            final Pattern pattern = Pattern.compile(regex);
+
+            // For some reason this one wasn't working
+            // Node n = graph.getNode(nodeid);
+            // ... so we map all nodes temporarily
+            final Map<Integer, Node> nodeMapper = new HashMap<Integer, Node>();
+            for (final Node currentNode : this.graph.getNodes()) {
+                nodeMapper.put(currentNode.getId(), currentNode);
+            }
+
+            String line;
+            while ((line = outputFromGraphviz.readLine()) != null) {
+                final Matcher match = pattern.matcher(line);
+                if (match.matches()) {
+
+                    final String nodeid = match.group(1);
+                    final String x = match.group(2);
+                    final String y = match.group(3);
+
+                    final Integer nodeid_i = new Integer(nodeid);
+                    final Float x_f = new BigDecimal(x).floatValue();
+                    final Float y_f = new BigDecimal(y).floatValue();                    
+                    final Node n = nodeMapper.get(nodeid_i);
+
+                    if (n != null) {
+                        n.getNodeData().setX(x_f);
+                        n.getNodeData().setY(y_f);
+                    } else {
+                        System.err.println("Cannot find nodeid " + nodeid);
+                    }
+
+                } else {
+                    // intentionally empty
+                    // everything which is not captured by the regex is not of any importance
+                }
+
+            }
+        } catch (IOException e) {
+            Exceptions.printStackTrace(e);            
+        } finally {
+            try {
+                if (in != null) {
+                    in.close();
+                }
+            } catch (IOException e) {
+            }
+        }
+
+        InputStream err = null;
+        try {
+            // Dump any errors
+            {
+                err = dotprocess.getErrorStream();
+                final InputStreamReader glue = new InputStreamReader(err);
+                final BufferedReader errorsFromGraphviz = new BufferedReader(glue);
+                String line;
+                while ((line = errorsFromGraphviz.readLine()) != null) {
+                    {
+                        System.err.println(line);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Exceptions.printStackTrace(e);            
+        } finally {
+            try {
+                if (err != null) {
+                    err.close();
+                }
+            } catch (IOException e) {
+            }
+        }
+    }
 }
