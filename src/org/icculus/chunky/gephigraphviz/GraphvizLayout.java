@@ -246,11 +246,14 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
             in = dotprocess.getInputStream();
 
             final BufferedReader outputFromGraphviz = new BufferedReader(new InputStreamReader(in));
-            // regex to search for nodes (1st group) and their respective positions (2nd + 3rd group)
-            // we have to filter out other parts of that line and allow for scientific notation; hence this is a little longish
-            final String regex = "^\\s*(\\d+)\\s\\[(?:[A-Za-z]+=\\\"?.*?\\\"?, )*pos=\\\"([+\\-]?(?:0|[1-9]\\d*)(?:\\.\\d*)?(?:[eE][+\\-]?\\d+)?),([+\\-]?(?:0|[1-9]\\d*)(?:\\.\\d*)?(?:[eE][+\\-]?\\d+)?)\\\"(?:, [A-Za-z]+=\\\"?.*?\\\"?)*\\];$";
-            final Pattern pattern = Pattern.compile(regex);
-
+            StringBuilder entireOutput = new StringBuilder();
+            String line;
+            while ((line = outputFromGraphviz.readLine()) != null) {
+                entireOutput.append(line);
+                entireOutput.append("\n");
+//                System.out.println("line");
+            }
+            
             // For some reason this one wasn't working
             // Node n = graph.getNode(nodeid);
             // ... so we map all nodes temporarily
@@ -259,34 +262,31 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
                 nodeMapper.put(currentNode.getId(), currentNode);
             }
 
-            String line;
-            while ((line = outputFromGraphviz.readLine()) != null) {
-                final Matcher match = pattern.matcher(line);
-                if (match.matches()) {
-
-                    final String nodeid = match.group(1);
-                    final String x = match.group(2);
-                    final String y = match.group(3);
-
-                    final Integer nodeid_i = new Integer(nodeid);
-                    final Float x_f = new BigDecimal(x).floatValue();
-                    final Float y_f = new BigDecimal(y).floatValue();                    
-                    final Node n = nodeMapper.get(nodeid_i);
-
-                    if (n != null) {
-                        n.getNodeData().setX(x_f);
-                        n.getNodeData().setY(y_f);
-                    } else {
-                        System.err.println("Cannot find nodeid " + nodeid);
-                    }
-
-                } else {
-                    // intentionally empty
-                    // everything which is not captured by the regex is not of any importance
+            final String regex = "^\\s*(?<nodeid>\\d+)\\s+\\[.*?[, ]?pos=\"(?<pos>[^\"]+?)\".*?\\]";
+            System.out.println(entireOutput);
+            final Pattern pat = Pattern.compile(regex, Pattern.MULTILINE | Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+            Matcher matcher = pat.matcher(entireOutput.toString());
+            while(matcher.find()) {
+                Integer nodeid = Integer.valueOf(matcher.group("nodeid"));
+                final Node n = nodeMapper.get(nodeid);
+                if(null == n) {
+                    System.err.println("Cannot find nodeid " + nodeid);
+                    continue;
                 }
-
+                String pos = matcher.group("pos");
+                String[] pair = pos.trim().split("[, ]");
+                if(pair.length != 2) {
+                    System.err.println("Don't know what to do with coordinates != 2; " + pos);
+                    continue;
+                }
+                BigDecimal x_bd = new BigDecimal(pair[0]);
+                BigDecimal y_bd = new BigDecimal(pair[1]);
+//                System.out.println("Node " + nodeid + " : " + pos + " = " + x_bd.floatValue() + "," + y_bd.floatValue());
+                n.getNodeData().setX(x_bd.floatValue());
+                n.getNodeData().setY(y_bd.floatValue());
             }
-        } catch (IOException e) {
+             
+       } catch (IOException e) {
             Exceptions.printStackTrace(e);            
         } finally {
             try {
