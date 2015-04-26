@@ -59,6 +59,8 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
     private String rankDir = "LR";
     private String overlap = "false";
     private Boolean concentrate = false;
+    
+    private Process dotprocess = null;
 
     private Graph graph;
 
@@ -114,7 +116,6 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
         cmd.add(this.dotBinary);
         cmd.add("-Tdot");
         final ProcessBuilder pb = new ProcessBuilder(cmd);
-        Process dotprocess = null;
 
         try {
             dotprocess = pb.start();
@@ -135,6 +136,7 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
         } finally {
             if (dotprocess != null) {
                 dotprocess.destroy();
+                dotprocess = null;
             }
             setConverged(true);
         }
@@ -142,6 +144,10 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
 
     @Override
     public void endAlgo() {
+        if(null != dotprocess) {
+            dotprocess.destroy();
+            dotprocess = null;
+        }
     }
 
     @Override
@@ -263,7 +269,7 @@ public class GraphvizLayout extends AbstractLayout implements Layout {
             }
 
             final String regex = "^\\s*(?<nodeid>\\d+)\\s+\\[.*?[, ]?pos=\"(?<pos>[^\"]+?)\".*?\\]";
-            System.out.println(entireOutput);
+//            System.out.println(entireOutput);
             final Pattern pat = Pattern.compile(regex, Pattern.MULTILINE | Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
             Matcher matcher = pat.matcher(entireOutput.toString());
             while(matcher.find()) {
